@@ -29,7 +29,7 @@ const Register = () => {
       if (success) {
         navigate('/dashboard');
       } else {
-        setError('Registration failed. Email may already be in use.');
+        setError('Registration failed. Username or email may already be in use.');
       }
     } catch (err) {
       setError('An error occurred during registration');
@@ -81,7 +81,6 @@ const Register = () => {
                 />
               </div>
             </div>
-
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                 Email address
@@ -99,7 +98,6 @@ const Register = () => {
                 />
               </div>
             </div>
-
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                 Password
@@ -117,7 +115,6 @@ const Register = () => {
                 />
               </div>
             </div>
-
             <div>
               <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
                 Confirm Password
@@ -135,7 +132,6 @@ const Register = () => {
                 />
               </div>
             </div>
-
             <div>
               <button
                 type="submit"
@@ -146,7 +142,6 @@ const Register = () => {
               </button>
             </div>
           </form>
-          
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
               Already have an account?{' '}

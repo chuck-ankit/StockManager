@@ -1,198 +1,184 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useInventoryStore } from '../../stores/inventoryStore';
-import { X } from 'lucide-react';
-import { InventoryItem } from '../../types';
+import { X, AlertCircle, ArrowUpCircle, ArrowDownCircle, Package } from 'lucide-react';
 
 interface TransactionFormProps {
-  onClose: () => void;
   type: 'stock-in' | 'stock-out';
-  itemId?: string;
+  itemId: string;
+  onClose: () => void;
+  onSuccess?: () => void;
 }
 
-const TransactionForm = ({ onClose, type, itemId }: TransactionFormProps) => {
-  const { items, fetchItems, stockIn, stockOut } = useInventoryStore();
-  const [selectedItemId, setSelectedItemId] = useState(itemId || '');
-  const [quantity, setQuantity] = useState(1);
-  const [notes, setNotes] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+const TransactionForm: React.FC<TransactionFormProps> = ({ type, itemId, onClose, onSuccess }) => {
+  const { items, stockIn, stockOut, loading, error } = useInventoryStore();
+  const [quantity, setQuantity] = useState<number>(0);
+  const [notes, setNotes] = useState<string>('');
+  const [formError, setFormError] = useState<string>('');
 
-  useEffect(() => {
-    fetchItems();
-    
-    if (itemId) {
-      setSelectedItemId(itemId);
-      const item = items.find(i => i.id === itemId);
-      if (item) {
-        setSelectedItem(item);
-      }
-    }
-  }, [fetchItems, itemId, items]);
-
-  useEffect(() => {
-    if (selectedItemId) {
-      const item = items.find(i => i.id === selectedItemId);
-      setSelectedItem(item || null);
-    } else {
-      setSelectedItem(null);
-    }
-  }, [selectedItemId, items]);
+  const selectedItem = items.find(item => item._id === itemId);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!selectedItemId) {
-      setError('Please select an item');
+    setFormError('');
+
+    if (!itemId) {
+      setFormError('Item ID is required');
       return;
     }
-    
+
+    if (!selectedItem) {
+      setFormError('Item not found');
+      return;
+    }
+
     if (quantity <= 0) {
-      setError('Quantity must be greater than zero');
+      setFormError('Quantity must be greater than 0');
       return;
     }
-    
+
     if (type === 'stock-out' && selectedItem && quantity > selectedItem.quantity) {
-      setError(`Insufficient stock. Available: ${selectedItem.quantity}`);
+      setFormError('Insufficient stock');
       return;
     }
-    
-    setLoading(true);
-    setError('');
-    
+
     try {
-      let success = false;
-      
+      let success;
       if (type === 'stock-in') {
-        success = await stockIn(selectedItemId, quantity, notes);
+        success = await stockIn(itemId, quantity, notes);
       } else {
-        success = await stockOut(selectedItemId, quantity, notes);
+        success = await stockOut(itemId, quantity, notes);
       }
-      
+
       if (success) {
-        onClose();
+        onSuccess?.();
       } else {
-        setError(`Failed to process ${type} transaction`);
+        setFormError(error || 'Failed to process transaction');
       }
     } catch (err) {
-      console.error(`Error processing ${type}:`, err);
-      setError(`Failed to process ${type} transaction`);
-    } finally {
-      setLoading(false);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to process transaction';
+      setFormError(errorMessage);
     }
   };
 
   return (
-    <div className="bg-white p-6 rounded-lg shadow-lg">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold text-gray-900">
-          {type === 'stock-in' ? 'Stock In' : 'Stock Out'}
-        </h2>
-        <button 
-          onClick={onClose}
-          className="text-gray-500 hover:text-gray-800"
-        >
-          <X size={20} />
-        </button>
-      </div>
-      
-      {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm">
-          {error}
+    <div className="fixed inset-0 bg-gray-900 bg-opacity-50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${
+                type === 'stock-in' 
+                  ? 'bg-gradient-to-br from-green-500 to-green-600' 
+                  : 'bg-gradient-to-br from-blue-500 to-blue-600'
+              }`}>
+                {type === 'stock-in' ? (
+                  <ArrowUpCircle className="w-5 h-5 text-white" />
+                ) : (
+                  <ArrowDownCircle className="w-5 h-5 text-white" />
+                )}
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {type === 'stock-in' ? 'Stock In' : 'Stock Out'}
+              </h2>
+            </div>
+            <button 
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-500 transition-colors duration-200"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
-      )}
-      
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="itemId" className="block text-sm font-medium text-gray-700">
-            Item <span className="text-red-500">*</span>
-          </label>
-          <select
-            id="itemId"
-            value={selectedItemId}
-            onChange={(e) => setSelectedItemId(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-            required
-            disabled={!!itemId}
-          >
-            <option value="">Select an item</option>
-            {items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} ({item.quantity} in stock)
-              </option>
-            ))}
-          </select>
-        </div>
-        
-        {selectedItem && (
-          <div className="bg-gray-50 p-4 rounded-md">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm text-gray-500">Current Stock</p>
-                <p className="text-lg font-medium text-gray-900">{selectedItem.quantity}</p>
+
+        {(error || formError) && (
+          <div className="mx-6 mt-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm flex items-start gap-2">
+            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <span>{formError || error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4">
+          <div>
+            <label htmlFor="item" className="block text-sm font-medium text-gray-700 mb-1">
+              Item
+            </label>
+            <div className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Package className="w-4 h-4 text-blue-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">Minimum Stock</p>
-                <p className="text-lg font-medium text-gray-900">{selectedItem.minQuantity}</p>
+                <div className="text-sm font-medium text-gray-900">
+                  {selectedItem?.name}
+                </div>
+                <div className="text-xs text-gray-500">
+                  Current Stock: {selectedItem?.quantity}
+                </div>
               </div>
             </div>
           </div>
-        )}
-        
-        <div>
-          <label htmlFor="quantity" className="block text-sm font-medium text-gray-700">
-            Quantity <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="number"
-            id="quantity"
-            min="1"
-            value={quantity}
-            onChange={(e) => setQuantity(Number(e.target.value))}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-            required
-          />
-        </div>
-        
-        <div>
-          <label htmlFor="notes" className="block text-sm font-medium text-gray-700">
-            Notes
-          </label>
-          <textarea
-            id="notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-            placeholder={`Optional notes for this ${type} transaction`}
-          />
-        </div>
-        
-        <div className="pt-4 flex justify-end space-x-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className={`
-              px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50
-              ${type === 'stock-in' 
-                ? 'bg-green-600 hover:bg-green-700 focus:ring-green-500' 
-                : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'}
-            `}
-          >
-            {loading 
-              ? (type === 'stock-in' ? 'Processing...' : 'Processing...') 
-              : (type === 'stock-in' ? 'Confirm Stock In' : 'Confirm Stock Out')
-            }
-          </button>
-        </div>
-      </form>
+
+          <div>
+            <label htmlFor="quantity" className="block text-sm font-medium text-gray-700 mb-1">
+              Quantity <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="number"
+              id="quantity"
+              min="1"
+              value={quantity}
+              onChange={(e) => setQuantity(Number(e.target.value))}
+              className="block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors duration-200"
+              required
+              placeholder="Enter quantity"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="notes" className="block text-sm font-medium text-gray-700 mb-1">
+              Notes
+            </label>
+            <textarea
+              id="notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm transition-colors duration-200"
+              placeholder="Add any additional notes..."
+            />
+          </div>
+
+          <div className="pt-4 flex justify-end space-x-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className={`px-4 py-2 text-sm font-medium text-white border border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+                type === 'stock-in'
+                  ? 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700'
+                  : 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700'
+              }`}
+            >
+              {loading ? (
+                <span className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Processing...
+                </span>
+              ) : (
+                type === 'stock-in' ? 'Stock In' : 'Stock Out'
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 };

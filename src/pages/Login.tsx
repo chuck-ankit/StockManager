@@ -6,7 +6,7 @@ import { Package } from 'lucide-react';
 const Login = () => {
   const navigate = useNavigate();
   const { login } = useAuthStore();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,14 +17,25 @@ const Login = () => {
     setLoading(true);
     
     try {
-      const success = await login(email, password);
-      if (success) {
-        navigate('/dashboard');
-      } else {
-        setError('Invalid email or password');
-      }
+      await login(identifier, password);
+      navigate('/dashboard');
     } catch (err) {
-      setError('An error occurred during login');
+      setError('Invalid username/email or password');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDemoLogin = async () => {
+    setError('');
+    setLoading(true);
+    
+    try {
+      await login('jdsacknjcn1@gmail.com', 'ankit123');
+      navigate('/dashboard');
+    } catch (err) {
+      setError('Invalid username/email or password');
       console.error(err);
     } finally {
       setLoading(false);
@@ -57,18 +68,18 @@ const Login = () => {
           
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
+              <label htmlFor="identifier" className="block text-sm font-medium text-gray-700">
+                Username or Email
               </label>
               <div className="mt-1">
                 <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="email"
+                  id="identifier"
+                  name="identifier"
+                  type="text"
+                  autoComplete="username"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
                   className="appearance-none block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 />
               </div>
@@ -102,6 +113,16 @@ const Login = () => {
               </button>
             </div>
           </form>
+
+          <div className="mt-4">
+            <button
+              onClick={handleDemoLogin}
+              disabled={loading}
+              className="w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-100"
+            >
+              {loading ? 'Signing in...' : 'Use Demo Account'}
+            </button>
+          </div>
           
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">

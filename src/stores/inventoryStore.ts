@@ -32,30 +32,28 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
   fetchItems: async (page = 1, pageSize = 10, category?: string) => {
     set({ loading: true, error: null });
     try {
-      const items = await inventoryService.getAllItems();
+      const response = await inventoryService.getItems({ page, limit: pageSize, category });
       
-      // Apply category filter if provided
-      const filteredItems = category 
-        ? items.filter(item => item.category === category)
-        : items;
-
-      // Apply pagination
-      const total = filteredItems.length;
-      const start = (page - 1) * pageSize;
-      const paginatedItems = filteredItems.slice(start, start + pageSize);
-
       set({ 
-        items: paginatedItems, 
+        items: response.items, 
         loading: false,
         pagination: {
-          page,
+          page: response.page,
           pageSize,
-          total
+          total: response.total
         }
       });
     } catch (error) {
       console.error('Error fetching inventory:', error);
-      set({ loading: false, error: 'Failed to load inventory items' });
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load inventory items';
+      set({ loading: false, error: errorMessage });
+      
+      // Handle auth errors
+      if (error && typeof error === 'object' && 'response' in error && 
+          error.response && typeof error.response === 'object' && 
+          'status' in error.response && error.response.status === 401) {
+        window.location.href = '/login';
+      }
     }
   },
 
@@ -74,143 +72,162 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
     }
   },
 
-  updateItem: async (id, updates) => {
+  updateItem: async (id: string, updates: Partial<InventoryItem>) => {
     try {
-      const updatedItem = await inventoryService.updateItem(id, updates);
-      if (!updatedItem) return false;
-      
-      // Refresh item list
-      await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
-      return true;
+      const success = await inventoryService.updateItem(id, updates);
+      if (success) {
+        await get().fetchItems(get().pagination.page, get().pagination.pageSize);
+        return true;
+      }
+      return false;
     } catch (error) {
-      console.error('Error updating item:', error);
-      set({ error: 'Failed to update item' });
+      set({ error: error instanceof Error ? error.message : 'Failed to update item' });
       return false;
     }
   },
 
   deleteItem: async (id) => {
+    set({ loading: true, error: null });
     try {
-      // First check if there are transactions for this item
-      const transactions = await transactionService.getTransactionsByItemId(id);
-      if (transactions.length > 0) {
-        set({ error: 'Cannot delete item with existing transactions' });
-        return false;
+      if (!id || typeof id !== 'string') {
+        throw new Error('Invalid item ID');
       }
 
-      // Delete the item
-      await inventoryService.deleteItem(id);
+      // Check if item has any transactions
+      const transactions = await transactionService.getAllTransactions();
+      const hasTransactions = transactions.some((t: any) => t.itemId === id);
       
-      // Refresh item list
+      if (hasTransactions) {
+        throw new Error('Cannot delete item with associated transactions');
+      }
+
+      // Delete any associated alerts first
+      const alerts = await alertService.getActiveAlerts();
+      const itemAlerts = alerts.filter((alert: any) => alert.itemId === id);
+      await Promise.all(itemAlerts.map((alert: any) => alertService.resolveAlert(alert.id)));
+
+      const success = await inventoryService.deleteItem(id);
+      
+      if (!success) {
+        throw new Error('Failed to delete item');
+      }
+
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
+      set({ loading: false, error: null });
       return true;
     } catch (error) {
-      console.error('Error deleting item:', error);
-      set({ error: 'Failed to delete item' });
+      const errorMessage = error instanceof Error ? error.message : 'Failed to delete item';
+      set({ loading: false, error: errorMessage });
       return false;
     }
   },
 
   stockIn: async (itemId, quantity, notes) => {
+    set({ loading: true, error: null });
     try {
-      const item = await inventoryService.getItemById(itemId);
-      if (!item) return false;
+      if (!itemId || typeof itemId !== 'string') {
+        throw new Error('Invalid item ID');
+      }
 
-      // Update inventory
-      const newQuantity = item.quantity + quantity;
-      await inventoryService.updateItem(itemId, { 
-        quantity: newQuantity,
-        updatedAt: new Date()
-      });
+      if (quantity <= 0) {
+        throw new Error('Quantity must be greater than 0');
+      }
 
-      // Record transaction
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      await transactionService.createTransaction({
+      // Get latest item data from server
+      const item = await inventoryService.getItem(itemId);
+
+      if (!item) {
+        throw new Error('Item not found');
+      }
+
+      const transaction = await transactionService.createTransaction({
         itemId,
-        quantity,
         type: 'stock-in',
-        date: new Date(),
-        notes,
-        createdBy: user._id || 'unknown'
-      });
-      
-      // Check if this resolves a low stock alert
-      if (newQuantity > item.minQuantity) {
-        const alerts = await alertService.getActiveAlerts();
-        const itemAlerts = alerts.filter(alert => alert.itemId.toString() === itemId);
-        
-        if (itemAlerts.length > 0) {
-          await Promise.all(itemAlerts.map(alert => 
-            alertService.resolveAlert(alert._id.toString())
-          ));
-        }
-      }
-
-      // Refresh item list
-      await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
-      return true;
-    } catch (error) {
-      console.error('Error processing stock-in:', error);
-      set({ error: 'Failed to process stock-in' });
-      return false;
-    }
-  },
-
-  stockOut: async (itemId, quantity, notes) => {
-    try {
-      const item = await inventoryService.getItemById(itemId);
-      if (!item) return false;
-
-      if (item.quantity < quantity) {
-        set({ error: 'Insufficient stock' });
-        return false;
-      }
-
-      // Update inventory
-      const newQuantity = item.quantity - quantity;
-      await inventoryService.updateItem(itemId, { 
-        quantity: newQuantity,
-        updatedAt: new Date()
-      });
-
-      // Record transaction
-      const user = JSON.parse(localStorage.getItem('user') || '{}');
-      await transactionService.createTransaction({
-        itemId,
         quantity,
-        type: 'stock-out',
-        date: new Date(),
         notes,
-        createdBy: user._id || 'unknown'
+        date: new Date().toISOString()
       });
 
-      // Check if this creates a low stock alert
-      if (newQuantity <= item.minQuantity) {
-        await alertService.createAlert({
-          itemId,
-          date: new Date(),
-          resolved: false
-        });
+      if (transaction) {
+        // Check if item is still below reorder point after stock in
+        const newQuantity = item.quantity + quantity;
+        if (newQuantity <= item.reorderPoint) {
+          await alertService.createAlert({
+            itemId,
+            type: 'low_stock',
+            message: `${item.name} (${item.description || 'No description'}) is below reorder point (${item.reorderPoint})`,
+            date: new Date().toISOString()
+          });
+        }
+        await get().fetchItems();
+        set({ loading: false, error: null });
+        return true;
       }
-
-      // Refresh item list
-      await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
-      return true;
+      set({ loading: false, error: 'Failed to create transaction' });
+      return false;
     } catch (error) {
-      console.error('Error processing stock-out:', error);
-      set({ error: 'Failed to process stock-out' });
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process stock-in';
+      set({ loading: false, error: errorMessage });
       return false;
     }
   },
 
-  searchItems: async (query) => {
+  stockOut: async (itemId: string, quantity: number, notes?: string): Promise<boolean> => {
+    set({ loading: true, error: null });
     try {
-      const items = await inventoryService.getAllItems();
-      return items.filter(item => 
+      if (!itemId || typeof itemId !== 'string') {
+        throw new Error('Invalid item ID');
+      }
+
+      if (quantity <= 0) {
+        throw new Error('Quantity must be greater than 0');
+      }
+
+      // Check current stock level
+      const item = await inventoryService.getItem(itemId);
+      if (!item) {
+        throw new Error('Item not found');
+      }
+      if (item.quantity < quantity) {
+        throw new Error('Insufficient stock');
+      }
+
+      const transaction = await transactionService.createTransaction({
+        itemId,
+        type: 'stock-out',
+        quantity,
+        notes,
+        date: new Date().toISOString()
+      });
+
+      if (transaction) {
+        // Check if item will be below reorder point after stock out
+        const newQuantity = item.quantity - quantity;
+        if (newQuantity <= item.reorderPoint) {
+          await alertService.createAlert({
+            itemId,
+            type: 'low_stock',
+            message: `${item.name} (${item.description || 'No description'}) is below reorder point (${item.reorderPoint})`,
+            date: new Date().toISOString()
+          });
+        }
+        await get().fetchItems();
+        set({ loading: false, error: null });
+        return true;
+      }
+      set({ loading: false, error: 'Failed to create transaction' });
+      return false;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to process stock-out';
+      set({ loading: false, error: errorMessage });
+      return false;
+    }
+  },
+
+  searchItems: async (query: string) => {
+    try {
+      const response = await inventoryService.getItems({ search: query });
+      return response.items.filter((item: InventoryItem) => 
         item.name.toLowerCase().includes(query.toLowerCase()) ||
         item.description?.toLowerCase().includes(query.toLowerCase()) ||
         item.category.toLowerCase().includes(query.toLowerCase())
@@ -223,11 +240,10 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   addTransaction: async (transaction) => {
     try {
-      set({ loading: true, error: null });
       await transactionService.createTransaction(transaction);
       
       // Update the item quantity
-      const item = get().items.find(i => i._id === transaction.itemId);
+      const item = get().items.find(i => i.id === transaction.itemId);
       if (item) {
         const newQuantity = transaction.type === 'stock-in' 
           ? item.quantity + transaction.quantity

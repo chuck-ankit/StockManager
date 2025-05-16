@@ -17,14 +17,20 @@ export interface AuthState {
 
 // Inventory types
 export interface InventoryItem {
-  id: string;
+  _id: string;
+  id?: string;
   name: string;
   description: string;
   category: string;
   quantity: number;
   minQuantity: number;
-  price: number;
-  tags: string[];
+  unitPrice: number;
+  reorderPoint: number;
+  status?: 'in_stock' | 'low_stock' | 'out_of_stock';
+  tags?: string[];
+  location?: string;
+  supplier?: string;
+  lastRestocked?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

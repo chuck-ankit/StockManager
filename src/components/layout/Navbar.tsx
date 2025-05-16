@@ -8,7 +8,10 @@ interface Alert {
   itemId: {
     _id: string;
     name: string;
+    description?: string;
   };
+  type: string;
+  message: string;
   date: string;
   resolved: boolean;
 }
@@ -101,10 +104,13 @@ const Navbar = ({ toggleSidebar }: NavbarProps) => {
                           <div className="flex justify-between items-start">
                             <div>
                               <p className="text-sm font-medium text-gray-900">
-                                Low Stock Alert
+                                {alert.type === 'low_stock' ? 'Low Stock Alert' : 'Out of Stock Alert'}
                               </p>
                               <p className="text-sm text-gray-500">
-                                {alert.itemId.name} is running low on stock
+                                {alert.message}
+                              </p>
+                              <p className="text-xs text-gray-400 mt-1">
+                                {new Date(alert.date).toLocaleString()}
                               </p>
                             </div>
                             <button
