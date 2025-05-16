@@ -1,75 +1,56 @@
 import { create } from 'zustand';
-import db from '../db/db';
-import { AuthState, User } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { authService } from '../services/api';
 
-export const useAuthStore = create<AuthState>((set) => {
-  // Initialize user from localStorage if available
-  const storedUser = localStorage.getItem('user');
-  const initialState = storedUser 
-    ? { user: JSON.parse(storedUser), isAuthenticated: true } 
-    : { user: null, isAuthenticated: false };
+interface User {
+  id: string;
+  username: string;
+  email: string;
+}
 
-  return {
-    ...initialState,
+interface AuthState {
+  user: User | null;
+  loading: boolean;
+  error: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  register: (username: string, email: string, password: string) => Promise<void>;
+  logout: () => void;
+}
 
-    login: async (email: string, password: string) => {
-      try {
-        // In a real app, we'd make an API call to validate credentials
-        const user = await db.users
-          .where('email')
-          .equals(email.toLowerCase())
-          .first();
+export const useAuthStore = create<AuthState>((set) => ({
+  user: null,
+  loading: false,
+  error: null,
 
-        if (user && user.password === password) { // In real app, would use proper password comparison
-          set({ user, isAuthenticated: true });
-          localStorage.setItem('user', JSON.stringify(user));
-          return true;
-        }
-        return false;
-      } catch (error) {
-        console.error('Login error:', error);
-        return false;
-      }
-    },
-
-    register: async (username: string, email: string, password: string) => {
-      try {
-        // Check if user already exists
-        const existingUser = await db.users
-          .where('email')
-          .equals(email.toLowerCase())
-          .first();
-
-        if (existingUser) {
-          return false;
-        }
-
-        // Create new user
-        const newUser: User = {
-          id: uuidv4(),
-          username,
-          email: email.toLowerCase(),
-          password, // In a real app, this would be hashed
-          createdAt: new Date()
-        };
-
-        await db.users.add(newUser);
-        
-        // Auto login after registration
-        set({ user: newUser, isAuthenticated: true });
-        localStorage.setItem('user', JSON.stringify(newUser));
-        
-        return true;
-      } catch (error) {
-        console.error('Registration error:', error);
-        return false;
-      }
-    },
-
-    logout: () => {
-      set({ user: null, isAuthenticated: false });
-      localStorage.removeItem('user');
+  login: async (email: string, password: string) => {
+    try {
+      set({ loading: true, error: null });
+      const response = await authService.login({ email, password });
+      set({ user: response.user, loading: false });
+    } catch (error) {
+      set({ 
+        error: error instanceof Error ? error.message : 'An error occurred during login',
+        loading: false 
+      });
+      throw error;
     }
-  };
-});
+  },
+
+  register: async (username: string, email: string, password: string) => {
+    try {
+      set({ loading: true, error: null });
+      const response = await authService.register({ username, email, password });
+      set({ user: response.user, loading: false });
+    } catch (error) {
+      set({ 
+        error: error instanceof Error ? error.message : 'An error occurred during registration',
+        loading: false 
+      });
+      throw error;
+    }
+  },
+
+  logout: () => {
+    authService.logout();
+    set({ user: null, error: null });
+  }
+}));

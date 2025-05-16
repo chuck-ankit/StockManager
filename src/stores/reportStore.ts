@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import db from '../db/db';
+import { inventoryService, transactionService } from '../db/services/databaseService';
 import { Transaction, ReportFilter } from '../types';
 
 interface ReportState {
@@ -22,29 +22,28 @@ export const useReportStore = create<ReportState>((set, get) => ({
   fetchTransactions: async (filter = {}) => {
     set({ loading: true, error: null });
     try {
-      let collection = db.transactions.toCollection();
+      let transactions = await transactionService.getAllTransactions();
       
       // Apply filters
       if (filter.startDate) {
-        collection = collection.filter(t => t.date >= filter.startDate!);
+        transactions = transactions.filter(t => t.date >= filter.startDate!);
       }
       
       if (filter.endDate) {
         const endDate = new Date(filter.endDate);
         endDate.setHours(23, 59, 59, 999);
-        collection = collection.filter(t => t.date <= endDate);
+        transactions = transactions.filter(t => t.date <= endDate);
       }
       
       if (filter.itemId) {
-        collection = collection.filter(t => t.itemId === filter.itemId);
+        transactions = transactions.filter(t => t.itemId.toString() === filter.itemId);
       }
       
       if (filter.transactionType) {
-        collection = collection.filter(t => t.type === filter.transactionType);
+        transactions = transactions.filter(t => t.type === filter.transactionType);
       }
       
       // Sort by date (newest first)
-      let transactions = await collection.toArray();
       transactions.sort((a, b) => b.date.getTime() - a.date.getTime());
       
       set({ transactions, loading: false });
@@ -57,36 +56,29 @@ export const useReportStore = create<ReportState>((set, get) => ({
   generateInventoryReport: async (filter = {}) => {
     set({ loading: true });
     try {
-      let query = db.inventory.toCollection();
+      let inventoryItems = await inventoryService.getAllItems();
       
       // Apply category filter if provided
       if (filter.category) {
-        query = query.filter(item => item.category === filter.category);
+        inventoryItems = inventoryItems.filter(item => item.category === filter.category);
       }
-      
-      const inventoryItems = await query.toArray();
       
       // Enhance inventory data with transaction history
       const enhancedItems = await Promise.all(
         inventoryItems.map(async item => {
           // Get transactions for this item
-          let transactionQuery = db.transactions
-            .where('itemId')
-            .equals(item.id);
+          let transactions = await transactionService.getTransactionsByItemId(item._id.toString());
           
+          // Apply date filters
           if (filter.startDate) {
-            transactionQuery = transactionQuery
-              .filter(t => t.date >= filter.startDate!);
+            transactions = transactions.filter(t => t.date >= filter.startDate!);
           }
           
           if (filter.endDate) {
             const endDate = new Date(filter.endDate);
             endDate.setHours(23, 59, 59, 999);
-            transactionQuery = transactionQuery
-              .filter(t => t.date <= endDate);
+            transactions = transactions.filter(t => t.date <= endDate);
           }
-          
-          const transactions = await transactionQuery.toArray();
           
           // Calculate movement stats
           const stockIn = transactions
@@ -125,17 +117,16 @@ export const useReportStore = create<ReportState>((set, get) => ({
     }
     
     // Get item details for each transaction
-    const itemIds = [...new Set(transactions.map(t => t.itemId))];
-    const items = await db.inventory
-      .where('id')
-      .anyOf(itemIds)
-      .toArray();
+    const itemIds = [...new Set(transactions.map(t => t.itemId.toString()))];
+    const items = await Promise.all(
+      itemIds.map(id => inventoryService.getItemById(id))
+    );
     
-    const itemMap = new Map(items.map(item => [item.id, item]));
+    const itemMap = new Map(items.map(item => [item._id.toString(), item]));
     
     // Enhance transactions with item details
     const enhancedTransactions = transactions.map(transaction => {
-      const item = itemMap.get(transaction.itemId);
+      const item = itemMap.get(transaction.itemId.toString());
       return {
         ...transaction,
         itemName: item ? item.name : 'Unknown Item',

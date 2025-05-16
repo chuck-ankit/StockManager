@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import db, { broadcastChange } from '../db/db';
+import { inventoryService, transactionService, alertService } from '../services/api';
 import { InventoryItem, Transaction, PaginationState } from '../types';
-import { v4 as uuidv4 } from 'uuid';
 
 interface InventoryState {
   items: InventoryItem[];
@@ -17,6 +16,7 @@ interface InventoryState {
   stockIn: (itemId: string, quantity: number, notes?: string) => Promise<boolean>;
   stockOut: (itemId: string, quantity: number, notes?: string) => Promise<boolean>;
   searchItems: (query: string) => Promise<InventoryItem[]>;
+  addTransaction: (transaction: Omit<Transaction, '_id'>) => Promise<void>;
 }
 
 export const useInventoryStore = create<InventoryState>((set, get) => ({
@@ -32,25 +32,20 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
   fetchItems: async (page = 1, pageSize = 10, category?: string) => {
     set({ loading: true, error: null });
     try {
-      let query = db.inventory;
+      const items = await inventoryService.getAllItems();
       
       // Apply category filter if provided
-      if (category) {
-        query = query.where('category').equals(category);
-      }
+      const filteredItems = category 
+        ? items.filter(item => item.category === category)
+        : items;
 
-      // Get total count for pagination
-      const total = await query.count();
-      
       // Apply pagination
-      const offset = (page - 1) * pageSize;
-      const items = await query
-        .offset(offset)
-        .limit(pageSize)
-        .toArray();
+      const total = filteredItems.length;
+      const start = (page - 1) * pageSize;
+      const paginatedItems = filteredItems.slice(start, start + pageSize);
 
       set({ 
-        items, 
+        items: paginatedItems, 
         loading: false,
         pagination: {
           page,
@@ -66,22 +61,12 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   addItem: async (itemData) => {
     try {
-      const newItem: InventoryItem = {
-        ...itemData,
-        id: uuidv4(),
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-
-      const id = await db.inventory.add(newItem);
+      const newItem = await inventoryService.createItem(itemData);
       
       // Refresh item list
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
       
-      // Broadcast the change for real-time updates
-      broadcastChange('inventory-updated', { action: 'added', item: newItem });
-      
-      return id as string;
+      return newItem._id.toString();
     } catch (error) {
       console.error('Error adding item:', error);
       set({ error: 'Failed to add item' });
@@ -91,22 +76,11 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   updateItem: async (id, updates) => {
     try {
-      const item = await db.inventory.get(id);
-      if (!item) return false;
-
-      const updatedItem = {
-        ...item,
-        ...updates,
-        updatedAt: new Date()
-      };
-
-      await db.inventory.update(id, updatedItem);
+      const updatedItem = await inventoryService.updateItem(id, updates);
+      if (!updatedItem) return false;
       
       // Refresh item list
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
-      // Broadcast the change
-      broadcastChange('inventory-updated', { action: 'updated', item: updatedItem });
       
       return true;
     } catch (error) {
@@ -119,24 +93,17 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
   deleteItem: async (id) => {
     try {
       // First check if there are transactions for this item
-      const hasTransactions = await db.transactions
-        .where('itemId')
-        .equals(id)
-        .count() > 0;
-
-      if (hasTransactions) {
+      const transactions = await transactionService.getTransactionsByItemId(id);
+      if (transactions.length > 0) {
         set({ error: 'Cannot delete item with existing transactions' });
         return false;
       }
 
       // Delete the item
-      await db.inventory.delete(id);
+      await inventoryService.deleteItem(id);
       
       // Refresh item list
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
-      
-      // Broadcast the change
-      broadcastChange('inventory-updated', { action: 'deleted', itemId: id });
       
       return true;
     } catch (error) {
@@ -148,69 +115,53 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
 
   stockIn: async (itemId, quantity, notes) => {
     try {
-      const item = await db.inventory.get(itemId);
+      const item = await inventoryService.getItemById(itemId);
       if (!item) return false;
 
-      // Start a transaction
-      await db.transaction('rw', [db.inventory, db.transactions], async () => {
-        // Update inventory
-        const newQuantity = item.quantity + quantity;
-        await db.inventory.update(itemId, { 
-          quantity: newQuantity,
-          updatedAt: new Date()
-        });
-
-        // Record transaction
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-        const transaction: Transaction = {
-          id: uuidv4(),
-          itemId,
-          quantity,
-          type: 'stock-in',
-          date: new Date(),
-          notes,
-          createdBy: user.id || 'unknown'
-        };
-        
-        await db.transactions.add(transaction);
-        
-        // Check if this resolves a low stock alert
-        if (newQuantity > item.minQuantity) {
-          const alerts = await db.lowStockAlerts
-            .where('itemId')
-            .equals(itemId)
-            .and(alert => !alert.resolved)
-            .toArray();
-            
-          if (alerts.length > 0) {
-            await Promise.all(alerts.map(alert => 
-              db.lowStockAlerts.update(alert.id, { resolved: true })
-            ));
-          }
-        }
+      // Update inventory
+      const newQuantity = item.quantity + quantity;
+      await inventoryService.updateItem(itemId, { 
+        quantity: newQuantity,
+        updatedAt: new Date()
       });
+
+      // Record transaction
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      await transactionService.createTransaction({
+        itemId,
+        quantity,
+        type: 'stock-in',
+        date: new Date(),
+        notes,
+        createdBy: user._id || 'unknown'
+      });
+      
+      // Check if this resolves a low stock alert
+      if (newQuantity > item.minQuantity) {
+        const alerts = await alertService.getActiveAlerts();
+        const itemAlerts = alerts.filter(alert => alert.itemId.toString() === itemId);
+        
+        if (itemAlerts.length > 0) {
+          await Promise.all(itemAlerts.map(alert => 
+            alertService.resolveAlert(alert._id.toString())
+          ));
+        }
+      }
 
       // Refresh item list
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
       
-      // Broadcast the change
-      broadcastChange('inventory-updated', { 
-        action: 'stock-in', 
-        itemId, 
-        quantity 
-      });
-      
       return true;
     } catch (error) {
-      console.error('Error processing stock in:', error);
-      set({ error: 'Failed to process stock in' });
+      console.error('Error processing stock-in:', error);
+      set({ error: 'Failed to process stock-in' });
       return false;
     }
   },
 
   stockOut: async (itemId, quantity, notes) => {
     try {
-      const item = await db.inventory.get(itemId);
+      const item = await inventoryService.getItemById(itemId);
       if (!item) return false;
 
       if (item.quantity < quantity) {
@@ -218,93 +169,88 @@ export const useInventoryStore = create<InventoryState>((set, get) => ({
         return false;
       }
 
-      // Start a transaction
-      await db.transaction('rw', [db.inventory, db.transactions, db.lowStockAlerts], async () => {
-        // Update inventory
-        const newQuantity = item.quantity - quantity;
-        await db.inventory.update(itemId, { 
-          quantity: newQuantity,
-          updatedAt: new Date()
-        });
-
-        // Record transaction
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-        const transaction: Transaction = {
-          id: uuidv4(),
-          itemId,
-          quantity,
-          type: 'stock-out',
-          date: new Date(),
-          notes,
-          createdBy: user.id || 'unknown'
-        };
-        
-        await db.transactions.add(transaction);
-        
-        // Check if we need to create a low stock alert
-        if (newQuantity <= item.minQuantity) {
-          // Check if there's already an unresolved alert
-          const existingAlert = await db.lowStockAlerts
-            .where('itemId')
-            .equals(itemId)
-            .and(alert => !alert.resolved)
-            .first();
-            
-          if (!existingAlert) {
-            await db.lowStockAlerts.add({
-              id: uuidv4(),
-              itemId,
-              date: new Date(),
-              resolved: false
-            });
-            
-            // Broadcast low stock alert
-            broadcastChange('low-stock-alert', { 
-              itemId, 
-              name: item.name,
-              quantity: newQuantity
-            });
-          }
-        }
+      // Update inventory
+      const newQuantity = item.quantity - quantity;
+      await inventoryService.updateItem(itemId, { 
+        quantity: newQuantity,
+        updatedAt: new Date()
       });
+
+      // Record transaction
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      await transactionService.createTransaction({
+        itemId,
+        quantity,
+        type: 'stock-out',
+        date: new Date(),
+        notes,
+        createdBy: user._id || 'unknown'
+      });
+
+      // Check if this creates a low stock alert
+      if (newQuantity <= item.minQuantity) {
+        await alertService.createAlert({
+          itemId,
+          date: new Date(),
+          resolved: false
+        });
+      }
 
       // Refresh item list
       await get().fetchItems(get().pagination.page, get().pagination.pageSize);
       
-      // Broadcast the change
-      broadcastChange('inventory-updated', { 
-        action: 'stock-out', 
-        itemId, 
-        quantity 
-      });
-      
       return true;
     } catch (error) {
-      console.error('Error processing stock out:', error);
-      set({ error: 'Failed to process stock out' });
+      console.error('Error processing stock-out:', error);
+      set({ error: 'Failed to process stock-out' });
       return false;
     }
   },
 
   searchItems: async (query) => {
     try {
-      if (!query) {
-        return [];
-      }
-
-      const searchTerm = query.toLowerCase();
-      const allItems = await db.inventory.toArray();
-      
-      return allItems.filter(item => 
-        item.name.toLowerCase().includes(searchTerm) ||
-        item.description.toLowerCase().includes(searchTerm) ||
-        item.category.toLowerCase().includes(searchTerm) ||
-        item.tags.some(tag => tag.toLowerCase().includes(searchTerm))
+      const items = await inventoryService.getAllItems();
+      return items.filter(item => 
+        item.name.toLowerCase().includes(query.toLowerCase()) ||
+        item.description?.toLowerCase().includes(query.toLowerCase()) ||
+        item.category.toLowerCase().includes(query.toLowerCase())
       );
     } catch (error) {
       console.error('Error searching items:', error);
-      set({ error: 'Failed to search items' });
       return [];
+    }
+  },
+
+  addTransaction: async (transaction) => {
+    try {
+      set({ loading: true, error: null });
+      await transactionService.createTransaction(transaction);
+      
+      // Update the item quantity
+      const item = get().items.find(i => i._id === transaction.itemId);
+      if (item) {
+        const newQuantity = transaction.type === 'stock-in' 
+          ? item.quantity + transaction.quantity
+          : item.quantity - transaction.quantity;
+        
+        await get().updateItem(transaction.itemId, { quantity: newQuantity });
+
+        // Check for low stock alert
+        if (newQuantity <= item.minQuantity) {
+          await alertService.createAlert({
+            itemId: transaction.itemId,
+            date: new Date().toISOString()
+          });
+        }
+      }
+      
+      set({ loading: false });
+    } catch (error) {
+      set({ 
+        error: error instanceof Error ? error.message : 'Failed to add transaction',
+        loading: false 
+      });
+      throw error;
     }
   }
 }));

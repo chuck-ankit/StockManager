@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import Login from './pages/Login';
@@ -8,15 +7,9 @@ import Inventory from './pages/Inventory';
 import Reports from './pages/Reports';
 import Layout from './components/layout/Layout';
 import ProtectedRoute from './components/auth/ProtectedRoute';
-import { initializeDatabase } from './db/db';
 
 function App() {
   const { isAuthenticated } = useAuthStore();
-
-  useEffect(() => {
-    // Initialize the database
-    initializeDatabase().catch(console.error);
-  }, []);
 
   return (
     <Routes>
